@@ -230,7 +230,7 @@ class VerifyQuipTaskSpec extends Specification {
 
     Response instanceResponse = new Response('http://oort', 200, 'OK', [], new TypedString(instance))
 
-    Headers headers = Headers.of("Content/type", "application/json")
+    Headers headers = Headers.of("Content-type", "application/json")
     Map<String, String> tags = new HashMap<>()
     tags.put("testKey", "testValue")
     Request request = new Request(HttpUrl.parse("http://foo.com"), HttpMethod.GET.name(), headers, null, tags as Map<Class<?>, ? extends Object>)
