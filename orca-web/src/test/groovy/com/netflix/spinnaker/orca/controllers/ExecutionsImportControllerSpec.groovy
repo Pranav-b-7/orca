@@ -16,6 +16,10 @@
 
 package com.netflix.spinnaker.orca.controllers
 
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException
 import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
 import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
 import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
@@ -26,7 +30,11 @@ import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionNotFoundException
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import de.huxhorn.sulky.ulid.ULID
+import org.springframework.http.HttpStatus
 import retrofit.RetrofitError
+import retrofit.client.Response
+import retrofit.converter.ConversionException
+import retrofit.mime.TypedByteArray
 import spock.lang.Specification
 import spock.lang.Unroll
 
@@ -97,7 +105,77 @@ class ExecutionsImportControllerSpec extends Specification {
 
     then:
     noExceptionThrown()
-    1 * front50Service.get('testapp') >> { throw RetrofitError.unexpectedError('http://test.front50.com', new RuntimeException())}
+    1 * front50Service.get('testapp') >> { throw new SpinnakerServerException(RetrofitError.unexpectedError('http://test.front50.com', new RuntimeException()))}
+    1 * executionRepository.retrieve(ExecutionType.PIPELINE, executionId) >> { throw new ExecutionNotFoundException('No execution')}
+    1 * executionRepository.store(execution)
+    0 * _
+    result.executionId == executionId
+    result.executionStatus == ExecutionStatus.SUCCEEDED
+  }
+
+  def 'should succeed to import if unable to retrieve app from front50 due to network error'() {
+    given:
+    String executionId = new ULID().nextULID()
+    PipelineExecutionImpl execution = new PipelineExecutionImpl(ExecutionType.PIPELINE, executionId, 'testapp')
+    execution.status = ExecutionStatus.SUCCEEDED
+
+    when:
+    ExecutionImportResponse result = controller.createExecution(execution)
+
+    then:
+    1 * front50Service.get('testapp') >> { throw new SpinnakerNetworkException(RetrofitError.networkError('http://test.front50.com', new IOException("Unable to connect to the host : test.front50.com")))}
+    1 * executionRepository.retrieve(ExecutionType.PIPELINE, executionId) >> { throw new ExecutionNotFoundException('No execution')}
+    1 * executionRepository.store(execution)
+    0 * _
+    result.executionId == executionId
+    result.executionStatus == ExecutionStatus.SUCCEEDED
+  }
+
+  def 'should succeed to import if unable to retrieve app from front50 due to http error'() {
+    given:
+    String executionId = new ULID().nextULID()
+    PipelineExecutionImpl execution = new PipelineExecutionImpl(ExecutionType.PIPELINE, executionId, 'testapp')
+    execution.status = ExecutionStatus.SUCCEEDED
+    def url = "http://test.front50.com"
+    Response mockResponse =
+        new Response(
+            url,
+            HttpStatus.BAD_REQUEST.value(),
+            HttpStatus.BAD_REQUEST.name(),
+            Collections.emptyList(),
+            new TypedByteArray("application/json", "{ \"error\": \"BAD REQUEST\"}".getBytes()))
+
+    when:
+    ExecutionImportResponse result = controller.createExecution(execution)
+
+    then:
+    1 * front50Service.get('testapp') >> { throw new SpinnakerHttpException(RetrofitError.httpError(url, mockResponse, null, null))}
+    1 * executionRepository.retrieve(ExecutionType.PIPELINE, executionId) >> { throw new ExecutionNotFoundException('No execution')}
+    1 * executionRepository.store(execution)
+    0 * _
+    result.executionId == executionId
+    result.executionStatus == ExecutionStatus.SUCCEEDED
+  }
+
+  def 'should succeed to import if unable to retrieve app from front50 due to conversion error'() {
+    given:
+    String executionId = new ULID().nextULID()
+    PipelineExecutionImpl execution = new PipelineExecutionImpl(ExecutionType.PIPELINE, executionId, 'testapp')
+    execution.status = ExecutionStatus.SUCCEEDED
+    def url = "http://test.front50.com"
+    Response mockResponse =
+        new Response(
+            url,
+            HttpStatus.BAD_REQUEST.value(),
+            HttpStatus.BAD_REQUEST.name(),
+            Collections.emptyList(),
+            new TypedByteArray("application/json", "{ \"error\": \"BAD REQUEST\"}".getBytes()))
+
+    when:
+    ExecutionImportResponse result = controller.createExecution(execution)
+
+    then:
+    1 * front50Service.get('testapp') >> { throw new SpinnakerConversionException(RetrofitError.conversionError(url, mockResponse, null, null, new ConversionException("Failed to parse")))}
     1 * executionRepository.retrieve(ExecutionType.PIPELINE, executionId) >> { throw new ExecutionNotFoundException('No execution')}
     1 * executionRepository.store(execution)
     0 * _

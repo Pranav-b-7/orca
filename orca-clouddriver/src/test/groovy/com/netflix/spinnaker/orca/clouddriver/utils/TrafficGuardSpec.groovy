@@ -20,6 +20,10 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.NoopRegistry
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException
 import com.netflix.spinnaker.moniker.Moniker
 import com.netflix.spinnaker.orca.clouddriver.CloudDriverService
 import com.netflix.spinnaker.orca.clouddriver.ModelUtils
@@ -30,8 +34,11 @@ import com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.support.Locat
 import com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.support.TargetServerGroup
 import com.netflix.spinnaker.orca.front50.Front50Service
 import com.netflix.spinnaker.orca.front50.model.Application
+import org.springframework.http.HttpStatus
 import retrofit.RetrofitError
 import retrofit.client.Response
+import retrofit.converter.ConversionException
+import retrofit.converter.JacksonConverter
 import spock.lang.Shared
 import spock.lang.Specification
 import spock.lang.Subject
@@ -462,7 +469,7 @@ class TrafficGuardSpec extends Specification {
     !applicationDetails.containsKey("trafficGuards")
     result == false
     1 * front50Service.get("app") >> {
-      throw new RetrofitError(null, null, new Response("http://stash.com", 404, "test reason", [], null), null, null, null, null)
+      throw new SpinnakerHttpException(new RetrofitError(null, null, new Response("http://stash.com", 404, "test reason", [], null), null, null, null, null))
     }
   }
 
@@ -618,6 +625,90 @@ class TrafficGuardSpec extends Specification {
 
     1 * front50Service.get("app") >> application
     0 * _
+  }
+
+  void "should invoke hasDisableLock() method and handle SpinnakerHttpException with the response code 404 and return false"() {
+    given:
+    def app = "testapp"
+    front50Service.get(app) >> {
+      def url = "https://front50service.com/v2/applications/"+app
+      Response response = new Response(url, HttpStatus.NOT_FOUND.value(), HttpStatus.NOT_FOUND.name(), [], null)
+      RetrofitError httpError = RetrofitError.httpError(url, response, new JacksonConverter(), null)
+      throw new SpinnakerHttpException(httpError)
+    }
+    when:
+    boolean result = trafficGuard.hasDisableLock(new Moniker(app: app, cluster: "app"), "test", location)
+
+    then:
+    !result
+  }
+
+  void "should invoke hasDisableLock() method and handle SpinnakerHttpException with the response code 403 and return false"() {
+    given:
+    def app = "testapp"
+    front50Service.get(app) >> {
+      def url = "https://front50service.com/v2/applications/"+app
+      Response response = new Response(url, HttpStatus.FORBIDDEN.value(), HttpStatus.FORBIDDEN.name(), [], null)
+      RetrofitError httpError = RetrofitError.httpError(url, response, new JacksonConverter(), null)
+      throw new SpinnakerHttpException(httpError)
+    }
+    when:
+    boolean result = trafficGuard.hasDisableLock(new Moniker(app: app, cluster: "app"), "test", location)
+
+    then:
+    !result
+  }
+
+  void "should invoke hasDisableLock() method and must throw SpinnakerNetworkException"() {
+    given:
+    def app = "testapp"
+    def url = "https://front50service.com/v2/applications/"+app
+    front50Service.get(app) >> {
+      RetrofitError networkError = RetrofitError.networkError(url, new IOException("Failed to connect to the host : front50service"))
+      throw new SpinnakerNetworkException(networkError)
+    }
+    when:
+    trafficGuard.hasDisableLock(new Moniker(app: app, cluster: "app"), "test", location)
+
+    then:
+    def networkException = thrown(SpinnakerNetworkException)
+    networkException.getMessage().equals("Failed to connect to the host : front50service")
+    networkException.getUrl().equals(url)
+  }
+
+  void "should invoke hasDisableLock() method and must throw SpinnakerConversionException"() {
+    given:
+    def app = "testapp"
+    def url = "https://front50service.com/v2/applications/"+app
+    front50Service.get(app) >> {
+      Response response = new Response(url, HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.name(), [], null)
+      RetrofitError conversionError = RetrofitError.conversionError(url, response, new JacksonConverter(), null, new ConversionException("Failed to convert"))
+      throw new SpinnakerConversionException(conversionError)
+    }
+    when:
+    trafficGuard.hasDisableLock(new Moniker(app: app, cluster: "app"), "test", location)
+
+    then:
+    def conversionException = thrown(SpinnakerConversionException)
+    conversionException.getMessage().equals("Failed to convert")
+    conversionException.getUrl().equals(url)
+  }
+
+  void "should invoke hasDisableLock() method and must throw SpinnakerServerException"() {
+    given:
+    def app = "testapp"
+    def url = "https://front50service.com/v2/applications/"+app
+    front50Service.get(app) >> {
+      RetrofitError unexpectedError = RetrofitError.unexpectedError(url, new IOException("Failure : Something went wrong, please try again later"))
+      throw new SpinnakerServerException(unexpectedError)
+    }
+    when:
+    trafficGuard.hasDisableLock(new Moniker(app: app, cluster: "app"), "test", location)
+
+    then:
+    def serverException = thrown(SpinnakerServerException)
+    serverException.getMessage().equals("Failure : Something went wrong, please try again later")
+    serverException.getUrl().equals(url)
   }
 
   private void addGuard(Map guard) {

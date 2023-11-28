@@ -20,6 +20,8 @@ import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.netflix.spinnaker.kork.annotations.VisibleForTesting;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException;
 import com.netflix.spinnaker.orca.api.pipeline.RetryableTask;
 import com.netflix.spinnaker.orca.api.pipeline.TaskResult;
 import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution;
@@ -36,7 +38,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import retrofit.RetrofitError;
 
 @Component
 public class MonitorFront50Task implements RetryableTask {
@@ -159,11 +160,12 @@ public class MonitorFront50Task implements RetryableTask {
     return TaskResult.SUCCEEDED;
   }
 
-  private Optional<Map<String, Object>> getPipeline(String id) {
+  @VisibleForTesting
+  Optional<Map<String, Object>> getPipeline(String id) {
     try {
       return Optional.of(front50Service.getPipeline(id));
-    } catch (RetrofitError e) {
-      if (e.getResponse() != null && e.getResponse().getStatus() == HTTP_NOT_FOUND) {
+    } catch (SpinnakerHttpException e) {
+      if (e.getResponseCode() == HTTP_NOT_FOUND) {
         return Optional.empty();
       }
       throw e;
@@ -171,14 +173,14 @@ public class MonitorFront50Task implements RetryableTask {
   }
 
   @SuppressWarnings("unchecked")
-  private Optional<Map<String, Object>> getDeliveryConfig(String id) {
+  @VisibleForTesting
+  Optional<Map<String, Object>> getDeliveryConfig(String id) {
     try {
       DeliveryConfig deliveryConfig = front50Service.getDeliveryConfig(id);
       return Optional.of(objectMapper.convertValue(deliveryConfig, Map.class));
-    } catch (RetrofitError e) {
+    } catch (SpinnakerHttpException e) {
       // ignore an unknown (404) or unauthorized (403, 401)
-      if (e.getResponse() != null
-          && Arrays.asList(404, 403, 401).contains(e.getResponse().getStatus())) {
+      if (Arrays.asList(404, 403, 401).contains(e.getResponseCode())) {
         return Optional.empty();
       } else {
         throw e;

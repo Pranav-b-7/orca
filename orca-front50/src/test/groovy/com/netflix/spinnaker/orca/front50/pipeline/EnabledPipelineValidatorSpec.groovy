@@ -16,15 +16,21 @@
 
 package com.netflix.spinnaker.orca.front50.pipeline
 
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException
 import com.netflix.spinnaker.orca.front50.Front50Service
 import com.netflix.spinnaker.orca.pipeline.PipelineValidator.PipelineValidationFailed
 import com.netflix.spinnaker.orca.pipeline.model.DefaultTrigger
 import com.netflix.spinnaker.orca.pipeline.model.PipelineTrigger
 import retrofit.RetrofitError
 import retrofit.client.Response
+import retrofit.converter.ConversionException
 import spock.lang.Specification
 import spock.lang.Subject
 import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.pipeline
+import static java.net.HttpURLConnection.HTTP_NOT_ACCEPTABLE
 import static java.net.HttpURLConnection.HTTP_NOT_FOUND
 
 class EnabledPipelineValidatorSpec extends Specification {
@@ -180,13 +186,76 @@ class EnabledPipelineValidatorSpec extends Specification {
     }
   }
 
+  def "catch SpinnakerConversionException while fetching pipeline using configId and allow one-off pipeline to run"() {
+
+    def url = "https://front50service.com/pipelines/"+execution.pipelineConfigId+"/get"
+    when:
+    validator.checkRunnable(execution)
+
+    then:
+    1 * front50Service.getPipeline(execution.pipelineConfigId) >> { throw new SpinnakerConversionException(RetrofitError.conversionError(url,
+        new Response(url, HTTP_NOT_ACCEPTABLE, HTTP_NOT_ACCEPTABLE.toString(), [], null),
+        null,
+        null,
+    new ConversionException("Failed to parse http body"))) }
+    1 * front50Service.getPipelines(execution.application, false) >> []
+
+    notThrown(PipelineValidationFailed)
+
+    where:
+    execution = pipeline {
+      application = "whatever"
+      pipelineConfigId = "1337"
+    }
+  }
+
+  def "catch SpinnakerNetworkException while fetching pipeline using configId and allow one-off pipeline to run"() {
+
+    def url = "https://front50service.com/pipelines/"+execution.pipelineConfigId+"/get"
+    when:
+    validator.checkRunnable(execution)
+
+    then:
+    1 * front50Service.getPipeline(execution.pipelineConfigId) >> { throw new SpinnakerNetworkException(RetrofitError.networkError(url, new IOException("Failed to connect to the host : front50service.com"))) }
+    1 * front50Service.getPipelines(execution.application, false) >> []
+
+    notThrown(PipelineValidationFailed)
+
+    where:
+    execution = pipeline {
+      application = "whatever"
+      pipelineConfigId = "1337"
+    }
+  }
+
+  def "catch SpinnakerServerException while fetching pipeline using configId and allow one-off pipeline to run"() {
+
+    def url = "https://front50service.com/pipelines/"+execution.pipelineConfigId+"/get"
+    when:
+    validator.checkRunnable(execution)
+
+    then:
+    1 * front50Service.getPipeline(execution.pipelineConfigId) >> { throw new SpinnakerServerException(RetrofitError.unexpectedError(url, new IOException("Something went wrong, Please try again later"))) }
+    1 * front50Service.getPipelines(execution.application, false) >> []
+
+    notThrown(PipelineValidationFailed)
+
+    where:
+    execution = pipeline {
+      application = "whatever"
+      pipelineConfigId = "1337"
+    }
+  }
+
   def notFoundError() {
-    RetrofitError.httpError(
+    new SpinnakerHttpException(RetrofitError.httpError(
       "http://localhost",
       new Response("http://localhost", HTTP_NOT_FOUND, "Not Found", [], null),
       null,
       null
-    )
+    ))
   }
+
+
 
 }

@@ -21,8 +21,10 @@ import com.netflix.spinnaker.fiat.model.UserPermission
 import com.netflix.spinnaker.fiat.model.resources.Role
 import com.netflix.spinnaker.fiat.shared.FiatService
 import com.netflix.spinnaker.fiat.shared.FiatStatus
+import com.netflix.spinnaker.kork.annotations.VisibleForTesting
 import com.netflix.spinnaker.kork.exceptions.ConfigurationException
 import com.netflix.spinnaker.kork.exceptions.SpinnakerException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
 import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
 import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
 import com.netflix.spinnaker.orca.clouddriver.service.JobService
@@ -134,7 +136,8 @@ class OperationsController {
     recordPipelineFailure(pipeline, errorMessage)
   }
 
-  private Map buildPipelineConfig(String pipelineConfigId, Map trigger) {
+  @VisibleForTesting
+  Map buildPipelineConfig(String pipelineConfigId, Map trigger) {
     if (front50Service == null) {
       throw new UnsupportedOperationException("Front50 is not enabled, no way to retrieve pipeline configs. Fix this by setting front50.enabled: true")
     }
@@ -143,8 +146,8 @@ class OperationsController {
       Map pipelineConfig = AuthenticatedRequest.allowAnonymous({ front50Service.getPipeline(pipelineConfigId) })
       pipelineConfig.trigger = trigger
       return pipelineConfig
-    } catch (RetrofitError e) {
-      if (e.response?.status == HTTP_NOT_FOUND) {
+    } catch (SpinnakerHttpException e) {
+      if (e.responseCode == HTTP_NOT_FOUND) {
         throw new NotFoundException("Pipeline config $pipelineConfigId not found")
       }
       throw e

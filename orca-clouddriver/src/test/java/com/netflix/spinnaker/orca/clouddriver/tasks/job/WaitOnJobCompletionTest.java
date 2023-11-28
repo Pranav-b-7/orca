@@ -19,6 +19,7 @@ package com.netflix.spinnaker.orca.clouddriver.tasks.job;
 import static com.netflix.spinnaker.orca.TestUtils.getResource;
 import static com.netflix.spinnaker.orca.TestUtils.getResourceAsStream;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,6 +31,10 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.netflix.spinnaker.kork.core.RetrySupport;
 import com.netflix.spinnaker.kork.exceptions.ConfigurationException;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException;
 import com.netflix.spinnaker.orca.api.pipeline.TaskResult;
 import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus;
 import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType;
@@ -53,7 +58,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpStatus;
+import retrofit.RetrofitError;
 import retrofit.client.Response;
+import retrofit.converter.ConversionException;
+import retrofit.converter.JacksonConverter;
 import retrofit.mime.TypedByteArray;
 
 public final class WaitOnJobCompletionTest {
@@ -526,6 +535,133 @@ public final class WaitOnJobCompletionTest {
                     + " Container: 'testrepvmfv2-l1' exited with code: 1.\n"
                     + " Status: Error.\n"
                     + " Logs: fatal error"));
+  }
+
+  @Test
+  void testExecuteMethodThrowsSpinnakerHttpException() {
+
+    var app = "atest";
+    var url = "https://front50service.com/v2/applications/" + app;
+    Response mockResponse =
+        new Response(
+            url,
+            HttpStatus.BAD_REQUEST.value(),
+            HttpStatus.BAD_REQUEST.name(),
+            Collections.emptyList(),
+            new TypedByteArray("application/json", "{ \"jobState\": \"Failed\"}".getBytes()));
+
+    RetrofitError httpError =
+        RetrofitError.httpError(url, mockResponse, new JacksonConverter(), null);
+
+    SpinnakerHttpException httpException = new SpinnakerHttpException(httpError);
+
+    when(mockFront50Service.get(app)).thenThrow(httpException);
+
+    StageExecutionImpl myStage =
+        createStageWithContextWithoutExecutionApplication(
+            ImmutableMap.of(
+                "deploy.jobs", ImmutableMap.of("test", ImmutableList.of("atest-btest-ctest"))));
+
+    assertThatThrownBy(() -> task.execute(myStage))
+        .isExactlyInstanceOf(SpinnakerHttpException.class)
+        .hasMessage(
+            "Status: "
+                + HttpStatus.BAD_REQUEST.value()
+                + ", URL: "
+                + url
+                + ", Message: "
+                + HttpStatus.BAD_REQUEST.name())
+        .hasCause(httpException.getCause());
+    verify(mockFront50Service, times(1)).get(eq(app));
+  }
+
+  @Test
+  void tesExecuteMethodThrowsSpinnakerConversionException() {
+
+    var app = "atest";
+    var url = "https://front50service.com/v2/applications/" + app;
+    Response mockResponse =
+        new Response(
+            url,
+            HttpStatus.BAD_REQUEST.value(),
+            HttpStatus.BAD_REQUEST.name(),
+            Collections.emptyList(),
+            new TypedByteArray("application/json", "{ \"jobState\": \"Failed\"}".getBytes()));
+
+    RetrofitError conversionError =
+        RetrofitError.conversionError(
+            url,
+            mockResponse,
+            new JacksonConverter(),
+            null,
+            new ConversionException("Failed to convert http error response body"));
+
+    SpinnakerConversionException conversionException =
+        new SpinnakerConversionException(conversionError);
+
+    when(mockFront50Service.get(app)).thenThrow(conversionException);
+
+    StageExecutionImpl myStage =
+        createStageWithContextWithoutExecutionApplication(
+            ImmutableMap.of(
+                "deploy.jobs", ImmutableMap.of("test", ImmutableList.of("atest-btest-ctest"))));
+
+    assertThatThrownBy(() -> task.execute(myStage))
+        .isExactlyInstanceOf(SpinnakerConversionException.class)
+        .hasMessage("Failed to convert http error response body");
+    verify(mockFront50Service, times(1)).get(eq(app));
+  }
+
+  @Test
+  void testExecuteMethodThrowsSpinnakerNetworkException() {
+
+    var app = "atest";
+    var url = "https://front50service.com/v2/applications/" + app;
+
+    RetrofitError networkError =
+        RetrofitError.networkError(
+            url, new IOException("Failed to connect to the host : front50.service.com"));
+
+    SpinnakerNetworkException networkException = new SpinnakerNetworkException(networkError);
+
+    when(mockFront50Service.get(app)).thenThrow(networkException);
+
+    StageExecutionImpl myStage =
+        createStageWithContextWithoutExecutionApplication(
+            ImmutableMap.of(
+                "deploy.jobs", ImmutableMap.of("test", ImmutableList.of("atest-btest-ctest"))));
+
+    assertThatThrownBy(() -> task.execute(myStage))
+        .isExactlyInstanceOf(SpinnakerNetworkException.class)
+        .hasMessage("Failed to connect to the host : front50.service.com")
+        .hasCause(networkException.getCause());
+    verify(mockFront50Service, times(1)).get(eq(app));
+  }
+
+  @Test
+  void testExecuteMethodThrowsSpinnakerServerException() {
+
+    var app = "atest";
+    var url = "https://front50service.com/v2/applications/" + app;
+
+    RetrofitError unexpectedError =
+        RetrofitError.unexpectedError(
+            url, new IOException("Something went wrong, Please try again later"));
+
+    SpinnakerServerException serverException = new SpinnakerServerException(unexpectedError);
+
+    when(mockFront50Service.get(app)).thenThrow(serverException);
+
+    StageExecutionImpl myStage =
+        createStageWithContextWithoutExecutionApplication(
+            ImmutableMap.of(
+                "deploy.jobs", ImmutableMap.of("test", ImmutableList.of("atest-btest-ctest"))));
+
+    assertThatThrownBy(() -> task.execute(myStage))
+        .isExactlyInstanceOf(SpinnakerServerException.class)
+        .hasMessage("Something went wrong, Please try again later")
+        .hasCause(serverException.getCause());
+    verify(mockFront50Service, times(1)).get(eq(app));
   }
 
   private StageExecutionImpl createStageWithContext(Map<String, ?> context) {

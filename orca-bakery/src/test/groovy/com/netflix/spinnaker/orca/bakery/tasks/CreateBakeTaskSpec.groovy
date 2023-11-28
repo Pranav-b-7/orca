@@ -16,8 +16,12 @@
 
 package com.netflix.spinnaker.orca.bakery.tasks
 
+import ch.qos.logback.classic.Level
 import com.netflix.spinnaker.kork.artifacts.model.Artifact
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException
 import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException
 import com.netflix.spinnaker.kork.web.selector.v2.SelectableService
 import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
 import com.netflix.spinnaker.orca.bakery.BakerySelector
@@ -25,12 +29,17 @@ import com.netflix.spinnaker.orca.bakery.api.BakeRequest
 import com.netflix.spinnaker.orca.bakery.api.BakeStatus
 import com.netflix.spinnaker.orca.bakery.api.BakeryService
 import com.netflix.spinnaker.orca.bakery.api.BaseImage
+import com.netflix.spinnaker.orca.front50.Front50Service
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
 import com.netflix.spinnaker.orca.pipeline.model.*
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils
 import com.netflix.spinnaker.orca.pipeline.util.PackageType
+import com.netflix.spinnaker.kork.test.log.MemoryAppender
+
+import org.springframework.http.HttpStatus
 import retrofit.RetrofitError
 import retrofit.client.Response
+import retrofit.converter.ConversionException
 import retrofit.converter.JacksonConverter
 import retrofit.mime.TypedString
 import spock.lang.Shared
@@ -46,6 +55,8 @@ import static java.net.HttpURLConnection.HTTP_NOT_FOUND
 import static java.util.UUID.randomUUID
 
 class CreateBakeTaskSpec extends Specification {
+
+  def memoryAppender = new MemoryAppender(CreateBakeTask)
 
   @Subject
     task = new CreateBakeTask()
@@ -1374,4 +1385,183 @@ class CreateBakeTaskSpec extends Specification {
     1 * task.artifactUtils.getAllArtifacts(_) >> []
     bakeResult.getPackageArtifacts().size() == 2
   }
+
+  void "should catch SpinnakerServerException and print the warning logs, while the execution of the create bake task"() {
+    given:
+    def app =  bakeStage.execution.application
+    def url = "https://front50service.com/v2/applications/"+app
+    def bakery = Mock(BakeryService) {
+      createBake(bakeConfig.region, _ as BakeRequest, null) >> runningStatus
+    }
+    task.front50Service = Mock(Front50Service) {
+      get(app) >> {
+        RetrofitError unexpectedError = RetrofitError.unexpectedError(url, new IOException("Failure : Something went wrong, please try again later"))
+        throw new SpinnakerServerException(unexpectedError)
+      }
+    }
+
+    def selectedBakeryService = Stub(SelectableService.SelectedService) {
+      getService() >> bakery
+      getConfig() >> [
+          extractBuildDetails: false,
+          allowMissingPackageInstallation: false,
+          roscoApisEnabled: false
+      ]
+    }
+
+    task.bakerySelector = Mock(BakerySelector) {
+      select(_) >> selectedBakeryService
+    }
+
+    when:
+    task.execute(bakeStage)
+
+    then:
+    notThrown(SpinnakerServerException)
+    memoryAppender.search("Error retrieving application "+app+" from front50, ignoring.", Level.WARN).size() == 1
+  }
+
+  void "should catch SpinnakerHttpException and should not print the warning logs for 404 response code, while the execution of the create bake task"() {
+    given:
+    def app =  bakeStage.execution.application
+    def url = "https://front50service.com/v2/applications/"+app
+    def bakery = Mock(BakeryService) {
+      createBake(bakeConfig.region, _ as BakeRequest, null) >> runningStatus
+    }
+    task.front50Service = Mock(Front50Service) {
+      get(app) >> {
+        Response response = new Response(url, HttpStatus.NOT_FOUND.value(), HttpStatus.NOT_FOUND.name(), [], null)
+        RetrofitError httpError = RetrofitError.httpError(url, response, new JacksonConverter(), null)
+        throw new SpinnakerHttpException(httpError)
+      }
+    }
+
+    def selectedBakeryService = Stub(SelectableService.SelectedService) {
+      getService() >> bakery
+      getConfig() >> [
+          extractBuildDetails: false,
+          allowMissingPackageInstallation: false,
+          roscoApisEnabled: false
+      ]
+    }
+
+    task.bakerySelector = Mock(BakerySelector) {
+      select(_) >> selectedBakeryService
+    }
+
+    when:
+    task.execute(bakeStage)
+
+    then:
+    notThrown(SpinnakerHttpException)
+    memoryAppender.search("Error retrieving application "+app+" from front50, ignoring.", Level.WARN).size() == 0
+  }
+
+  void "should catch SpinnakerHttpException and print the warning logs for any response code other than 404, while the execution of the create bake task"() {
+    given:
+    def app =  bakeStage.execution.application
+    def url = "https://front50service.com/v2/applications/"+app
+    def bakery = Mock(BakeryService) {
+      createBake(bakeConfig.region, _ as BakeRequest, null) >> runningStatus
+    }
+    task.front50Service = Mock(Front50Service) {
+      get(app) >> {
+        Response response = new Response(url, HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.name(), [], null)
+        RetrofitError httpError = RetrofitError.httpError(url, response, new JacksonConverter(), null)
+        throw new SpinnakerHttpException(httpError)
+      }
+    }
+
+    def selectedBakeryService = Stub(SelectableService.SelectedService) {
+      getService() >> bakery
+      getConfig() >> [
+          extractBuildDetails: false,
+          allowMissingPackageInstallation: false,
+          roscoApisEnabled: false
+      ]
+    }
+
+    task.bakerySelector = Mock(BakerySelector) {
+      select(_) >> selectedBakeryService
+    }
+
+    when:
+    task.execute(bakeStage)
+
+    then:
+    notThrown(SpinnakerHttpException)
+    memoryAppender.search("Error retrieving application "+app+" from front50, ignoring.", Level.WARN).size() == 1
+  }
+
+  void "should catch SpinnakerNetworkException and print the warning logs, while the execution of the create bake task"() {
+    given:
+    def app =  bakeStage.execution.application
+    def url = "https://front50service.com/v2/applications/"+app
+    def bakery = Mock(BakeryService) {
+      createBake(bakeConfig.region, _ as BakeRequest, null) >> runningStatus
+    }
+    task.front50Service = Mock(Front50Service) {
+      get(app) >> {
+        RetrofitError networkError = RetrofitError.networkError(url, new IOException("Failed to connect to the host : front50service.com"))
+        throw new SpinnakerNetworkException(networkError)
+      }
+    }
+
+    def selectedBakeryService = Stub(SelectableService.SelectedService) {
+      getService() >> bakery
+      getConfig() >> [
+          extractBuildDetails: false,
+          allowMissingPackageInstallation: false,
+          roscoApisEnabled: false
+      ]
+    }
+
+    task.bakerySelector = Mock(BakerySelector) {
+      select(_) >> selectedBakeryService
+    }
+
+    when:
+    task.execute(bakeStage)
+
+    then:
+    notThrown(SpinnakerNetworkException)
+    memoryAppender.search("Error retrieving application "+app+" from front50, ignoring.", Level.WARN).size() == 1
+  }
+
+  void "should catch SpinnakerConversionException and print the warning logs, while the execution of the create bake task"() {
+    given:
+    def app =  bakeStage.execution.application
+    def url = "https://front50service.com/v2/applications/"+app
+    def bakery = Mock(BakeryService) {
+      createBake(bakeConfig.region, _ as BakeRequest, null) >> runningStatus
+    }
+    task.front50Service = Mock(Front50Service) {
+      get(app) >> {
+        Response response = new Response(url, HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.name(), [], null)
+        RetrofitError conversionError = RetrofitError.conversionError(url, response, new JacksonConverter(), null, new ConversionException("Failed to parse the error response body"))
+        throw new SpinnakerConversionException(conversionError)
+      }
+    }
+
+    def selectedBakeryService = Stub(SelectableService.SelectedService) {
+      getService() >> bakery
+      getConfig() >> [
+          extractBuildDetails: false,
+          allowMissingPackageInstallation: false,
+          roscoApisEnabled: false
+      ]
+    }
+
+    task.bakerySelector = Mock(BakerySelector) {
+      select(_) >> selectedBakeryService
+    }
+
+    when:
+    task.execute(bakeStage)
+
+    then:
+    notThrown(SpinnakerConversionException)
+    memoryAppender.search("Error retrieving application "+app+" from front50, ignoring.", Level.WARN).size() == 1
+  }
+
 }

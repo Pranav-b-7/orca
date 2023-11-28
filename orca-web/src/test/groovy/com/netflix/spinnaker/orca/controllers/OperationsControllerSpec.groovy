@@ -21,12 +21,21 @@ import com.netflix.spinnaker.fiat.model.resources.Account
 import com.netflix.spinnaker.fiat.model.resources.Role
 import com.netflix.spinnaker.fiat.shared.FiatService
 import com.netflix.spinnaker.fiat.shared.FiatStatus
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerConversionException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerNetworkException
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerServerException
 import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
 import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
 import com.netflix.spinnaker.orca.api.preconfigured.jobs.TitusPreconfiguredJobProperties
 import com.netflix.spinnaker.orca.clouddriver.service.JobService
 import com.netflix.spinnaker.orca.exceptions.PipelineTemplateValidationException
 import com.netflix.spinnaker.orca.front50.Front50Service
+import javassist.NotFoundException
+import org.springframework.http.HttpStatus
+import retrofit.RetrofitError
+import retrofit.client.Response
+import retrofit.converter.ConversionException
 
 import javax.servlet.http.HttpServletResponse
 import com.netflix.spinnaker.kork.common.Header
@@ -760,6 +769,121 @@ class OperationsControllerSpec extends Specification {
     preconfiguredWebhooks.size() == 2
     preconfiguredWebhooks.find { it.label == 'job1' }
     preconfiguredWebhooks.find { it.label == 'job3' }
+  }
+
+  def "should throw NotFoundException when the pipeline is not found for the given config Id while building pipeline config"() {
+    given:
+    def pipelineId = "1234"
+    def url = "https://front50service.com/pipelines/"+pipelineId+"/get"
+    front50Service.getPipeline(pipelineId) >> {
+      throw new SpinnakerHttpException(RetrofitError.httpError(url, new Response(url, HttpStatus.NOT_FOUND.value(), HttpStatus.NOT_FOUND.name(), Collections.emptyList(), null), null, null))
+    }
+    Map trigger = [
+        type      : "manual",
+        parameters: [
+            key1: 'value1',
+            key2: 'value2'
+        ]
+    ]
+
+    when:
+    controller.buildPipelineConfig(pipelineId, trigger)
+
+    then:
+    def notFoundException = thrown(NotFoundException)
+    notFoundException.message == format("Pipeline config %s not found", pipelineId)
+  }
+
+  def "should throw SpinnakerHttpException when get pipeline API returns BAD REQUEST"() {
+    given:
+    def pipelineId = "1234"
+    def url = "https://front50service.com/pipelines/"+pipelineId+"/get"
+    front50Service.getPipeline(pipelineId) >> {
+      throw new SpinnakerHttpException(RetrofitError.httpError(url, new Response(url, HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.name(), Collections.emptyList(), null), null, null))
+    }
+    Map trigger = [
+        type      : "manual",
+        parameters: [
+            key1: 'value1',
+            key2: 'value2'
+        ]
+    ]
+
+    when:
+    controller.buildPipelineConfig(pipelineId, trigger)
+
+    then:
+    def httpException = thrown(SpinnakerHttpException)
+    httpException.message == "Status: "+HttpStatus.BAD_REQUEST.value()+", URL: "+url+", Message: "+HttpStatus.BAD_REQUEST.name()
+  }
+
+  def "should throw SpinnakerConversionException when get pipeline API fails to parse the response body"() {
+    given:
+    def pipelineId = "1234"
+    def url = "https://front50service.com/pipelines/"+pipelineId+"/get"
+    front50Service.getPipeline(pipelineId) >> {
+      throw new SpinnakerConversionException(RetrofitError.conversionError(url, new Response(url, HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.name(), Collections.emptyList(), null), null, null, new ConversionException("Failed to parse the response body")))
+    }
+    Map trigger = [
+        type      : "manual",
+        parameters: [
+            key1: 'value1',
+            key2: 'value2'
+        ]
+    ]
+
+    when:
+    controller.buildPipelineConfig(pipelineId, trigger)
+
+    then:
+    def conversionException = thrown(SpinnakerConversionException)
+    conversionException.message == "Failed to parse the response body"
+  }
+
+  def "should throw SpinnakerNetworkException when get pipeline API fails due to some network error"() {
+    given:
+    def pipelineId = "1234"
+    def url = "https://front50service.com/pipelines/"+pipelineId+"/get"
+    front50Service.getPipeline(pipelineId) >> {
+      throw new SpinnakerNetworkException(RetrofitError.networkError(url, new IOException("Failed to connect to the host : front50service.com")))
+    }
+    Map trigger = [
+        type      : "manual",
+        parameters: [
+            key1: 'value1',
+            key2: 'value2'
+        ]
+    ]
+
+    when:
+    controller.buildPipelineConfig(pipelineId, trigger)
+
+    then:
+    def networkException = thrown(SpinnakerNetworkException)
+    networkException.message == "Failed to connect to the host : front50service.com"
+  }
+
+  def "should throw SpinnakerServerException when get pipeline API fails due to some unexpected error"() {
+    given:
+    def pipelineId = "1234"
+    def url = "https://front50service.com/pipelines/"+pipelineId+"/get"
+    front50Service.getPipeline(pipelineId) >> {
+      throw new SpinnakerServerException(RetrofitError.unexpectedError(url, new IOException("Something went wrong, please try again")))
+    }
+    Map trigger = [
+        type      : "manual",
+        parameters: [
+            key1: 'value1',
+            key2: 'value2'
+        ]
+    ]
+
+    when:
+    controller.buildPipelineConfig(pipelineId, trigger)
+
+    then:
+    def serverException = thrown(SpinnakerServerException)
+    serverException.message == "Something went wrong, please try again"
   }
 
   static WebhookProperties.PreconfiguredWebhook createPreconfiguredWebhook(
