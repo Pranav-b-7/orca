@@ -49,7 +49,7 @@ public class MonitoredDeployBaseTask implements RetryableTask {
       new HashMap<>();
   private final ObjectMapper objectMapper = new ObjectMapper();
 
-  MonitoredDeployBaseTask(
+  public MonitoredDeployBaseTask(
       DeploymentMonitorServiceProvider deploymentMonitorServiceProvider, Registry registry) {
     this.deploymentMonitorServiceProvider = deploymentMonitorServiceProvider;
     this.registry = registry;
@@ -277,8 +277,7 @@ public class MonitoredDeployBaseTask implements RetryableTask {
               .orElse("");
       return String.format("headers: %s\nresponse body: %s", httpException.getHeaders(), body);
     } catch (Exception e) {
-      log.error(
-          "Failed to fully parse http response while reading response from deployment monitor", e);
+      log.error("Exception occurred while reading the http error response details : ", e);
     }
 
     return "headers: \nresponse body: ";
