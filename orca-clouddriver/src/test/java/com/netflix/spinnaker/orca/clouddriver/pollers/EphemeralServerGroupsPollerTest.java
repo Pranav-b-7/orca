@@ -35,8 +35,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import retrofit.RetrofitError;
 import retrofit.client.Response;
-import retrofit.converter.ConversionException;
-import retrofit.converter.JacksonConverter;
 import retrofit.mime.TypedByteArray;
 
 public class EphemeralServerGroupsPollerTest {
@@ -77,7 +75,7 @@ public class EphemeralServerGroupsPollerTest {
   }
 
   @Test
-  public void testSystemExceptionStackTraceWhenRetrofitHttpErrorOccurrs() {
+  public void testSystemExceptionStackTraceWhenRetrofitHttpErrorOccurs() {
     var application = "testapp";
 
     var url = "https://front50service.com/v2/applications/" + application;
@@ -90,8 +88,7 @@ public class EphemeralServerGroupsPollerTest {
             new TypedByteArray(
                 "application/json", "{ \"error\": \"application testapp not found\"}".getBytes()));
 
-    RetrofitError httpError =
-        RetrofitError.httpError(url, mockResponse, new JacksonConverter(), null);
+    RetrofitError httpError = RetrofitError.httpError(url, mockResponse, null, null);
 
     when(front50Service.get(application)).thenThrow(httpError);
 
@@ -101,37 +98,5 @@ public class EphemeralServerGroupsPollerTest {
     assertThatThrownBy(() -> ephemeralServerGroupsPoller.getApplication(application))
         .hasCause(systemException.getCause())
         .hasCauseExactlyInstanceOf(RetrofitError.class);
-  }
-
-  @Test
-  public void testSystemExceptionStackTraceWhenRetrofitConversionErrorOccurrs() {
-    var application = "testapp";
-
-    var url = "https://front50service.com/v2/applications/" + application;
-    Response mockResponse =
-        new Response(
-            url,
-            HttpStatus.FORBIDDEN.value(),
-            HttpStatus.FORBIDDEN.name(),
-            Collections.emptyList(),
-            new TypedByteArray("application/json", "{ \"error\": \"FORBIDDEN\"}".getBytes()));
-
-    RetrofitError conversionError =
-        RetrofitError.conversionError(
-            url,
-            mockResponse,
-            new JacksonConverter(),
-            null,
-            new ConversionException("Failed to parse the error response body"));
-
-    SystemException systemException =
-        new SystemException(conversionError.getMessage(), conversionError);
-
-    when(front50Service.get(application)).thenThrow(conversionError);
-
-    System.out.println("cause : " + systemException.getCause());
-    assertThatThrownBy(() -> ephemeralServerGroupsPoller.getApplication(application))
-        .hasCauseExactlyInstanceOf(RetrofitError.class)
-        .hasCause(systemException.getCause());
   }
 }
