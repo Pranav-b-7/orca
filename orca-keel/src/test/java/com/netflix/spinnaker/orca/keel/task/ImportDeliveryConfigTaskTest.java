@@ -44,6 +44,7 @@ import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeAll;
@@ -236,6 +237,131 @@ public class ImportDeliveryConfigTaskTest {
     assertThat(httpErrorBody.getMessage()).isEqualTo(httpStatus.name());
     assertThat(httpErrorBody.getDetails()).isEqualTo(Map.of("exception", "Http Error occured"));
     assertThat(httpErrorBody.getTimestamp()).isNotEqualTo(timestamp);
+  }
+
+  @Test
+  public void testTaskResultWhenErrorBodyIsEmpty() {
+
+    var mockResponseBody =
+        Map.of(
+            "name",
+            "keeldemo-manifest",
+            "application",
+            "keeldemo",
+            "artifacts",
+            Collections.emptySet(),
+            "environments",
+            Collections.emptySet());
+
+    String expectedMessage =
+        String.format(
+            "Non-retryable HTTP response %s received from downstream service: %s",
+            HttpStatus.BAD_REQUEST.value(),
+            "HTTP 400 " + wireMock.baseUrl() + "/delivery-configs/: 400 Bad Request");
+
+    var errorMap = new HashMap<>();
+    errorMap.put("message", expectedMessage);
+
+    TaskResult terminal =
+        TaskResult.builder(ExecutionStatus.TERMINAL).context(Map.of("error", errorMap)).build();
+
+    // Simulate any 4xx http error with empty error response body
+    String emptyBody = "";
+    simulateFault("/delivery-configs/", emptyBody, HttpStatus.BAD_REQUEST);
+
+    when(scmService.getDeliveryConfigManifest(
+            (String) contextMap.get("repoType"),
+            (String) contextMap.get("projectKey"),
+            (String) contextMap.get("repositorySlug"),
+            (String) contextMap.get("directory"),
+            (String) contextMap.get("manifest"),
+            (String) contextMap.get("ref")))
+        .thenReturn(mockResponseBody);
+
+    var result = importDeliveryConfigTask.execute(stage);
+
+    assertThat(result).isEqualTo(terminal);
+  }
+
+  @Test
+  public void testTaskResultWhenHttp5xxErrorIsThrown() {
+
+    var mockResponseBody =
+        Map.of(
+            "name",
+            "keeldemo-manifest",
+            "application",
+            "keeldemo",
+            "artifacts",
+            Collections.emptySet(),
+            "environments",
+            Collections.emptySet());
+
+    contextMap.put("attempt", (Integer) contextMap.get("attempt") + 1);
+    contextMap.put(
+        "errorFromLastAttempt",
+        "Retryable HTTP response 500 received from downstream service: HTTP 500 "
+            + wireMock.baseUrl()
+            + "/delivery-configs/: 500 Server Error");
+
+    TaskResult running = TaskResult.builder(ExecutionStatus.RUNNING).context(contextMap).build();
+
+    // Simulate any 5xx http error with empty error response body
+    String emptyBody = "";
+    simulateFault("/delivery-configs/", emptyBody, HttpStatus.INTERNAL_SERVER_ERROR);
+
+    when(scmService.getDeliveryConfigManifest(
+            (String) contextMap.get("repoType"),
+            (String) contextMap.get("projectKey"),
+            (String) contextMap.get("repositorySlug"),
+            (String) contextMap.get("directory"),
+            (String) contextMap.get("manifest"),
+            (String) contextMap.get("ref")))
+        .thenReturn(mockResponseBody);
+
+    var result = importDeliveryConfigTask.execute(stage);
+
+    assertThat(result).isEqualTo(running);
+  }
+
+  @Test
+  public void testTaskResultWhenAPIFailsWithNetworkError() {
+
+    var mockResponseBody =
+        Map.of(
+            "name",
+            "keeldemo-manifest",
+            "application",
+            "keeldemo",
+            "artifacts",
+            Collections.emptySet(),
+            "environments",
+            Collections.emptySet());
+
+    contextMap.put("attempt", (Integer) contextMap.get("attempt") + 1);
+    contextMap.put(
+        "errorFromLastAttempt",
+        String.format(
+            "Network error talking to downstream service, attempt 1 of %s: Connection reset: Connection reset",
+            contextMap.get("maxRetries")));
+
+    TaskResult running = TaskResult.builder(ExecutionStatus.RUNNING).context(contextMap).build();
+
+    // Simulate network failure
+    simulateFault("/delivery-configs/", Fault.CONNECTION_RESET_BY_PEER);
+
+    when(scmService.getDeliveryConfigManifest(
+            (String) contextMap.get("repoType"),
+            (String) contextMap.get("projectKey"),
+            (String) contextMap.get("repositorySlug"),
+            (String) contextMap.get("directory"),
+            (String) contextMap.get("manifest"),
+            (String) contextMap.get("ref")))
+        .thenReturn(mockResponseBody);
+
+    var result = importDeliveryConfigTask.execute(stage);
+
+    assertThat(result).isEqualTo(running);
   }
 
   private ImportDeliveryConfigTask.SpringHttpError mockSpringHttpError(
