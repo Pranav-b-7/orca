@@ -49,7 +49,7 @@ class RegisterCanaryTask implements Task {
     }
 
     Map c = buildCanary(app, deployStage)
-
+    
     log.info("Registering Canary (executionId: ${stage.execution.id}, stageId: ${stage.id}, canary: ${c})")
 
     String canaryId = null
