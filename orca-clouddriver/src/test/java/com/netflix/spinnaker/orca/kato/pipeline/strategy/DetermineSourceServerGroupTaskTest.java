@@ -28,6 +28,8 @@ import com.github.tomakehurst.wiremock.http.HttpHeaders;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo;
 import com.netflix.spinnaker.kork.core.RetrySupport;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerHttpException;
+import com.netflix.spinnaker.kork.retrofit.exceptions.SpinnakerRetrofitErrorHandler;
 import com.netflix.spinnaker.okhttp.SpinnakerRequestInterceptor;
 import com.netflix.spinnaker.orca.clouddriver.CloudDriverService;
 import com.netflix.spinnaker.orca.clouddriver.OortService;
@@ -49,7 +51,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.http.HttpStatus;
 import retrofit.RestAdapter;
-import retrofit.RetrofitError;
 import retrofit.client.OkClient;
 import retrofit.converter.JacksonConverter;
 
@@ -90,6 +91,7 @@ public class DetermineSourceServerGroupTaskTest {
             .setEndpoint(wmRuntimeInfo.getHttpBaseUrl())
             .setClient(okClient)
             .setLogLevel(retrofitLogLevel)
+            .setErrorHandler(SpinnakerRetrofitErrorHandler.getInstance())
             .setConverter(new JacksonConverter(objectMapper))
             .build()
             .create(OortService.class);
@@ -135,8 +137,11 @@ public class DetermineSourceServerGroupTaskTest {
         HttpStatus.FORBIDDEN);
 
     assertThatThrownBy(() -> determineSourceServerGroupTask.execute(stage))
-        .isExactlyInstanceOf(RetrofitError.class)
-        .hasMessage("403 Forbidden");
+        .isExactlyInstanceOf(SpinnakerHttpException.class)
+        .hasMessage(
+            "Status: 403, URL: http://localhost:"
+                + wireMock.getPort()
+                + "/applications/testCluster/clusters/test/testCluster/aws/us-east-1/serverGroups/target/ancestor_asg_dynamic, Message: Forbidden");
   }
 
   private @NotNull Cluster createCluster(ServerGroup serverGroup) {
